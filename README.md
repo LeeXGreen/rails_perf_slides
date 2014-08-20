@@ -1,4 +1,5 @@
-rails_perf_slides
-=================
+Lunch and Learn: Rails Performance
 
-Rails peformance slides for Spiceworks presentation
+Lee Green, August 2014
+
+A [reveal.js](https://github.com/hakimel/reveal.js/) presentation.

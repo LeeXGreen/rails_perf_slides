@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="en">
+
+	<head>
+		<meta charset="utf-8">
+
+        <title>Rails Performance</title>
+
+        <meta name="description" content="Stuff to do to make your Rails app faster">
+        <meta name="author" content="Lee Green">
+
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<link rel="stylesheet" href="css/reveal.min.css">
+		<link rel="stylesheet" href="css/theme/solarized.css" id="theme">
+
+		<!-- For syntax highlighting -->
+		<link rel="stylesheet" href="lib/css/zenburn.css">
+
+		<!-- If the query includes 'print-pdf', include the PDF print sheet -->
+		<script>
+			if( window.location.search.match( /print-pdf/gi ) ) {
+				var link = document.createElement( 'link' );
+				link.rel = 'stylesheet';
+				link.type = 'text/css';
+				link.href = 'css/print/pdf.css';
+				document.getElementsByTagName( 'head' )[0].appendChild( link );
+			}
+        </script>
+
+		<!--[if lt IE 9]>
+		<script src="lib/js/html5shiv.js"></script>
+		<![endif]-->
+	</head>
+
+	<body>
+
+		<div class="reveal">
+
+			<!-- Any section element inside of this container is displayed as a slide -->
+			<div class="slides">
+				<section>
+                    <h1>Rails Performance</h1>
+					<p>
+                    <small>Lee Green</small>
+					</p>
+                </section>
+
+                <section>
+                    <h2>Tools and supplies:</h2>
+
+                    <p>a.k.a. apps, scripts, gems</p>
+                </section>
+
+                <section>
+                    <h2><a href="http://www.beyondgrep.com">Ack</a>, <a href="https://github.com/ggreer/the_silver_searcher">Ag</a></h2>
+
+                    <p>Better than grep for a developer's use case:<br/> searching a source code tree</p>
+
+                    <pre><code class='no-highlight'>
+$ time grep --exclude-dir log --recursive prod-recent-rated .
+
+... Still running after 25 minutes ...
+                    </code></pre>
+                    <pre><code class='no-highlight'>
+$ time ack prod-recent-rate
+
+app/views/product/_long_form_show.html.erb
+118:        <% cache [@recently_rated_products, 'prod-recent-rated'] do %>
+
+real     0m5.862s
+user     0m5.045s
+sys      0m0.814s
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2><a href='http://iterm2.com'>iTerm2</a></h2>
+
+                    <p>Killer feature: highlighting</p>
+                    <img src="http://static.spiceworks.com/shared/post/0002/9181/Screen_Shot_2014-07-15_at_10.25.05_PM.png" alt="iterm2 highlighting" />
+                    <img src="https://hipchat.spiceworks.com/files/1/41/OebHbbZZLreIO18/iterm2.png" alt="more iterm2 highlighting" />
+                </section>
+
+                <section>
+                    <h2>New Relic</h2>
+
+                    <img src="https://hipchat.spiceworks.com/files/1/41/zw0ubeZ50TVhWAT/newrelic.png" alt="new relic"/>
+                </section>
+                <section>
+                    <h2><a href='https://github.com/rupa/z'>z</a></h2>
+
+                    <p>For freaky-fast directory changes</p>
+                    <pre><code class='no-highlight'>
+$ z comm; pwd
+/Users/leeg/devel/community
+
+$ z tr; pwd
+/Users/leeg/devel/tron
+
+$ z perf; pwd
+/Users/leeg/devel/lee_perf_lunch_and_learn
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Fix Stuff</h2>
+                </section>
+
+                <section>
+                    <h2>Eliminate unused variables / queries</h2>
+
+                    <br/>
+                    <pre><code class='ruby data-trim stretch'>
+class SomeController
+  def show
+    some_lonely_var = Post.where("topic_id = ? AND deleted = ?", self.id, 0)
+
+    self.do_some_other_stuff without: that_variable # :(
+  end
+end
+                    </code> </pre>
+                </section>
+
+                <section>
+                    <h2>Use the right data structure</h2>
+
+                    <pre><code class='ruby data-trim stretch'>
+class SomeModel
+  def self.unique_topic_ids_by_group
+    sql = "some big long nasty SQL query"
+    results = ActiveRecord::Base.connection.select_rows(sql)
+
+    ids = []
+    distinct_groups = []
+
+    results.each do |result|
+      topic_id, group_id = result
+
+      # Array#include? is O(N), Set#include? is O(1)
+      unless distinct_groups.include?(group_id)
+        ids << topic_id
+        distinct_groups << group_id
+      end
+    end
+
+    return ids
+  end
+end
+                    </code> </pre>
+                </section>
+
+                <section>
+                    <h2>Avoid N+1 queries</h2>
+
+                    <pre><code class='ruby data-trim stretch'>
+class Topic
+  has_many :posts
+end
+
+class Post
+  belongs_to :user
+  belongs_to :topic
+end
+
+t = Topic.first
+t.posts.each do |p|
+  puts p.user.name
+end
+
+# select * from topics order by id desc limit 1
+# select * from posts where topic_id = ?
+
+# select * from users where id = ?
+# select * from users where id = ?
+# select * from users where id = ?
+# select * from users where id = ?
+# select * from users where id = ?
+# select * from users where id = ?
+# select * from users where id = ?
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Avoid N+1 queries</h2>
+
+                    <pre><code class='ruby data-trim stretch'>
+class Topic
+  has_many :posts
+end
+
+class Post
+  belongs_to :user
+  belongs_to :topic
+end
+
+t = Topic.first
+t.posts.includes(:user).each do |p|
+  puts p.user.name
+end
+
+# select * from topics order by id desc limit 1
+# select * from posts where topic_id = ?
+# select * from users where id in (?)
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>... don't write N+1 code, either</h2>
+                    <pre><code class='ruby data-trim stretch'>
+module SomeHelper
+  def category_html_list
+    url_names = %w{cloud databases email hardware linux}
+    url_names.map do |url_name|
+      category = GroupCategory.find_by_url_name(url_name)
+      content_tag( :li, ... )
+    end
+  end
+end
+
+# select * from group_categories where url_name = ?
+# select * from group_categories where url_name = ?
+# select * from group_categories where url_name = ?
+# select * from group_categories where url_name = ?
+# select * from group_categories where url_name = ?
+# select * from group_categories where url_name = ?
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>... don't write N+1 code, either</h2>
+                    <pre><code class='ruby data-trim stretch'>
+module SomeHelper
+  def fetch_categories_quickly(url_names)
+    categories = GroupCategory.where('url_name in (?)', url_names).all
+    Hash[categories.map { |gcat| [gcat.url_name, gcat] }]
+  end
+
+  def category_html_list
+    url_names = %w{cloud databases email hardware linux}
+    categories = fetch_categories_quickly(categories)
+    url_names.map do |url_name|
+      category = categories[url_name]
+      content_tag( :li, ... )
+    end
+  end
+end
+
+# select * from group_categories where url_name IN (?)
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>#count vs. #size vs. #length</h2>
+                    <pre><code class='ruby data-trim stretch'>
+
+t = Topic.first
+# select * from topics order by id limit 1
+
+t.posts.count
+# select count(*) from posts where topic_id = ?
+
+t.posts.size
+# select count(*) from posts where topic_id = ?
+
+
+
+t2 = Topic.first.includes(:posts)
+# select * from topics order by id limit 1
+# select * from posts where topic_id = ?
+
+t.posts.size
+# no query
+
+t.posts.count
+# select count(*) from posts where topic_id = ?
+
+                    </code></pre>
+                </section>
+
+                <section>
+                  <h2>Find the issues here</h2>
+                  <pre><code class='ruby data-trim stretch'>
+class SpiceList
+  has_many :spice_list_items
+  belongs_to :group
+end
+
+class SpiceListItem
+  belongs_to :spice_list
+end
+
+class GroupController
+  def spice_lists
+    @group.spice_lists.map do |list|
+      { name: list.name, total_items: list.spice_list_items.count }
+    end
+  end
+end
+
+# select * from spice_lists where group_id = ?
+# select count(*) from spice_list_items where spice_list_id = ?
+# select count(*) from spice_list_items where spice_list_id = ?
+# select count(*) from spice_list_items where spice_list_id = ?
+# select count(*) from spice_list_items where spice_list_id = ?
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Use counter caches as appropriate</h2>
+                    <pre><code class='ruby data-trim stretch'>
+class SpiceList
+  has_many :spice_list_items
+  belongs_to :group
+end
+
+class SpiceListItem
+  belongs_to :spice_list
+end
+
+class GroupController
+  def spice_lists
+    @group.spice_lists.includes(:spice_list_items).map do |list|
+      { name: list.name, total_items: list.spice_list_items.size }
+    end
+  end
+end
+
+# select * from spice_lists where group_id = ?
+# select * from spice_list_items where spice_list_id in ?
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Use counter caches as appropriate</h2>
+                    <pre><code class='ruby data-trim stretch'>
+class SpiceList
+  has_many :spice_list_items
+  belongs_to :group
+end
+
+class SpiceListItem
+  belongs_to :spice_list, :counter_cache => :total_items
+end
+
+class GroupController
+  def spice_lists
+    @group.spice_lists.map do |list|
+      { name: list.name, total_items: list.total_items }
+    end
+  end
+end
+
+# select * from spice_lists where group_id = ?
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Finish your migrations</h2>
+                    <pre><code class='ruby data-trim stretch'>
+class Topic
+  def root_post
+    if self.root_post_id
+      Post.where(id: self.root_post_id).first
+    else
+      self.posts.where("posts.parent_id IS NULL").order(:id).first
+      # do some legwork to make sure the DB gets updated as needed
+    end
+  end
+end
+
+# check prod database -- every topic has a root_post_id set
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Finish your migrations</h2>
+                    <pre><code class='ruby data-trim stretch'>
+class Topic
+  belongs_to :root_post, :class_name => 'Post'
+
+  def root_post
+    rp = super
+    return rp if rp
+
+    rp = self.posts.where("posts.parent_id IS NULL").order(:id).first
+    # do some legwork to make sure the DB gets updated as needed
+  end
+end
+
+# what's the difference? Now we can eager-load this relationship!
+Group.SPICEWORKS_TV.topics.includes(:root_post => :resource)
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Use caching properly</h2>
+
+                    <p>Fragment caching allows us to avoid re-rendering views</p>
+                    <pre><code class='ruby data-trim stretch'>
+<% cache(partner) do %>
+  <li>
+    <div class="media">
+      <div class="img medium">
+        <%= image_tag user_avatar(partner, :medium) %>
+      </div>
+      <div class="bd">
+        <p><%= link_to_user partner %></p>
+        <p><%= partner.user_profile.comp_name %></p>
+      </div>
+    </div>
+  </li>
+<% end %>
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Use caching properly</h2>
+
+                    <p>Rails.cache allows us to cache from within our code as well</p>
+                    <pre><code class='ruby data-trim stretch'>
+class SomeClass
+  def self.some_calculation()
+    Rails.cache.fetch("some_class/some_calculation") do
+      some_slow_operation()
+    end
+  end
+end
+
+SomeClass.some_calculation() # slow
+SomeClass.some_calculation() # fast
+
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>... but bad code still hurts</h2>
+                    <pre><code class='ruby data-trim stretch'>
+class GroupCategory
+  def self.SPICEWORKS_ID
+    Rails.cache.fetch("group_category/spiceworks_id") do
+      gc = GroupCategory.find_by_name('Spiceworks')
+      gc ? gc.id : nil
+    end
+  end
+
+  def self.SPICEWORKS
+    return nil unless GroupCategory.SPICEWORKS_ID
+
+    GroupCategory.find_by_id(GroupCategory.SPICEWORKS_ID)
+  end
+
+  def self.spiceworks_group_url_names
+    return [] unless GroupCategory.SPICEWORKS
+
+    GroupCategory.SPICEWORKS.groups.all.map(&:url_name)
+  end
+end
+
+GroupCategory.SPICEWORKS_ID # => 1 memcache call
+GroupCategory.SPICEWORKS # => 2 memcache calls
+GroupCategory.spiceworks_group_url_names # => 4 memcache calls. ugh.
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>can we do better?</h2>
+                    <pre><code class='ruby data-trim stretch'>
+class GroupCategory
+  def self.SPICEWORKS_ID
+    Rails.cache.fetch("group_category/spiceworks_id") do
+      gc = GroupCategory.find_by_name('Spiceworks')
+      gc ? gc.id : nil
+    end
+  end
+
+  def self.SPICEWORKS
+    sw_id = GroupCategory.SPICEWORKS_ID
+    sw_id ? GroupCategory.find_by_id(sw_id) : nil
+  end
+
+  def self.spiceworks_group_url_names
+    sw = GroupCategory.SPICEWORKS
+    sw ? sw.groups.all.map(&:url_name) : []
+  end
+end
+
+GroupCategory.SPICEWORKS_ID # => 1 memcache call
+GroupCategory.SPICEWORKS # => 1 memcache call
+GroupCategory.spiceworks_group_url_names # => 1 memcache call
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Cache at the appropriate level</h2>
+                    <pre><code class='ruby data-trim stretch'>
+class GroupCategory
+  def self.SPICEWORKS_ID
+    return @@SPICEWORKS_ID if @@SPICEWORKS_ID
+    gc = GroupCategory.find_by_name('Spiceworks')
+    @@SPICEWORKS_ID = gc ? gc.id : -1
+  rescue
+    @@SPICEWORKS_ID = -1
+  end
+
+  def self.SPICEWORKS
+    sw_id = GroupCategory.SPICEWORKS_ID
+    sw_id != -1 ? GroupCategory.find_by_id(sw_id) : nil
+  end
+
+  def self.spiceworks_group_url_names
+    sw = GroupCategory.SPICEWORKS
+    sw ? sw.groups.all.map(&:url_name) : []
+  end
+end
+
+GroupCategory.SPICEWORKS_ID # => 1 memcache call
+GroupCategory.SPICEWORKS # => 0 memcache calls
+GroupCategory.spiceworks_group_url_names # => 0 memcache calls
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Singular vs. Plural context</h2>
+                    <p>Rendering user avatars -- admins get special treatment</p>
+                    <pre><code class='ruby data-trim stretch'>
+class Group
+  def has_admin?(user)
+    return false if user.guest?
+
+    gm = group_memberships.find_by_user_id(user.id)
+    return false if gm.nil?
+    return gm.role == ADMIN ? true : false
+  end
+end
+
+# in a view:
+
+posts.each do |p|
+  is_admin = g.has_admin?(p.user)
+  render_avatar(user, is_admin)
+end
+
+# select * from group_memberships where group_id = ? and user_id = ?
+# select * from group_memberships where group_id = ? and user_id = ?
+# select * from group_memberships where group_id = ? and user_id = ?
+# select * from group_memberships where group_id = ? and user_id = ?
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Singular vs. Plural context</h2>
+                    <p>Rendering user avatars -- admins get special treatment</p>
+                    <pre><code class='ruby data-trim stretch'>
+class Group
+  def admins_include?(user)
+    return false if user.guest?
+
+    if @admin_ids.nil?
+      admin_ids = group_memberships.where(role: ADMIN).map(&:user_id)
+      @admin_ids = Set.new(admin_ids)
+    end
+
+    @admin_ids.include?(user.id)
+  end
+end
+
+# in a view:
+
+posts.each do |p|
+  is_admin = g.admins_include?(p.user)
+  render_avatar(user, is_admin)
+end
+
+# select * from group_memberships where group_id = ? and role = 'ADMIN'
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Singular vs. Plural context, pt. 2</h2>
+                    <p>Rendering topics in a list -- read vs. unread</p>
+                    <pre><code class='ruby data-trim stretch'>
+class Topic
+  def is_unread_by?(user)
+    last_read_time = user.last_read_time(self)
+
+    (last_read_time == nil || last_read_time < self[:last_post_created_at])
+  end
+end
+
+class User
+  def last_read_time(topic)
+    t = TopicRead.where(user_id: self.id, topic_id: topic.id)
+    t ? t.updated_at : nil
+  end
+end
+
+# in a view:
+<% topics.each do |t| %>
+  <% unread = t.is_unread_by?(@user) %>
+<% end %>
+
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Singular vs. Plural context, pt. 2</h2>
+                    <p>Rendering topics in a list -- read vs. unread</p>
+                    <pre><code class='ruby data-trim stretch'>
+class Topic
+  def is_unread_by?(user, prefetch_data = {})
+    last_read_time = prefetch_data[self.id] || user.last_read_time(self)
+
+    (last_read_time == nil || last_read_time < self[:last_post_created_at])
+  end
+end
+
+class User
+  def topic_read_times
+    key = "users/#{self.id}/topic_read_times"
+    Rails.cache.fetch(key, :expires_in => 30.minutes) do
+      self.topic_reads.inject({}) do |memo, topic_read|
+        memo[topic_read.topic_id] = topic_read.updated_at
+        memo
+      end
+    end
+  end
+end
+
+# in a view:
+<% prefetch_data = @user.topic_read_times %>
+<% topics.each do |t| %>
+  <% unread = t.is_unread_by?(@user, prefetch_data) %>
+<% end %>
+
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h2>Lessons learned</h2>
+
+                    <ul>
+                        <li>Rails' abstractions are its strength and its weakness.</li>
+                        <ul>
+                            <li>Make sure you know what is on the other side</li>
+                            <li>Make sure you stick to the implicit contract</li>
+                        </ul>
+                    </ul>
+                </section>
+
+                <section>
+                    <h2>Lessons learned</h2>
+
+                    <ul>
+                        <li>Sometimes you need to break the abstractions for speed.</li>
+                        <ul>
+                            <li>This is okay as long as it is done sparingly, and in the most crucial places.</li>
+                        </ul>
+                    </ul>
+                </section>
+
+                <section>
+                    <h2>Lessons learned</h2>
+
+                    <ul>
+                        <li>Consider the context:</li>
+                        <li>Even the most efficient query can be inefficient if you have to run it for each member of a collection.</li>
+                    </ul>
+                </section>
+			</div>
+
+		</div>
+
+		<script src="lib/js/head.min.js"></script>
+		<script src="js/reveal.min.js"></script>
+
+		<script>
+
+			// Full list of configuration options available here:
+			// https://github.com/hakimel/reveal.js#configuration
+			Reveal.initialize({
+				controls: true,
+				progress: false,
+				history: true,
+                center: true,
+                //keyboard: true,
+                //touch: false,
+
+				theme: 'solarized',
+				transition: 'none',
+
+				// Optional libraries used to extend on reveal.js
+				dependencies: [
+					{ src: 'lib/js/classList.js', condition: function() { return !document.body.classList; } },
+					{ src: 'plugin/markdown/marked.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+					{ src: 'plugin/markdown/markdown.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+					{ src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } },
+					{ src: 'plugin/zoom-js/zoom.js', async: true, condition: function() { return !!document.body.classList; } },
+					{ src: 'plugin/notes/notes.js', async: true, condition: function() { return !!document.body.classList; } },
+				]
+			});
+
+		</script>
+
+	</body>
+</html>
